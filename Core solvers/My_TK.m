@@ -18,7 +18,7 @@ function [X, Out] = My_TK(A,B,opts)
 % BIT Numer. Math. 62(1), 171–194 (2022)
 %
 %
-% Coded by Yijie Wang, Beihang University, yj_wang@buaa.edu.cn
+% Coded by Yijie Wang, Beihang University, yjwangmath@gmail.com
 
 %% setting some parameters
 [m,l,n] = size(A);

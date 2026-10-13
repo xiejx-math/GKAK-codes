@@ -18,7 +18,7 @@ function [X, Out] = My_tAKSHBM(A,B,opts)
 % Appl. Numer. Math. 202, 100–119 (2024)
 %
 %
-% Coded by Yijie Wang, Beihang University, yj_wang@buaa.edu.cn
+% Coded by Yijie Wang, Beihang University, yjwangmath@gmail.com
 
 %% setting some parameters
 [m,l,n] = size(A);

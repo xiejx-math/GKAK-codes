@@ -1,5 +1,5 @@
-function [X, Out] = My_TriTKGK(A,B,opts)
-% Tridiagonal-based TKGK for solving tensor linear system
+function [X, Out] = My_GSGKAK(A,B,opts)
+% Efficient Gram-Schmidt-based GKATK for solving tensor linear system
 %                 A * X = B
 % where * denotes the t-product
 %
@@ -17,7 +17,7 @@ function [X, Out] = My_TriTKGK(A,B,opts)
 % 
 %
 %
-% Coded by Yijie Wang, Beihang University, yj_wang@buaa.edu.cn
+% Coded by Yijie Wang, Beihang University, yjwangmath@gmail.com
 
 %% setting some parameters
 [m,l,n] = size(A);
@@ -61,10 +61,10 @@ if (flag && isfield(opts,'X_star'))
     strategy = 1;
 else
     strategy = 0;
-    normB = norm(B,'fro')^2+1e-2;
+     normB=norm(B,'fro')^2+1e-2;
 end
 
-%%%% setting the permutation
+%%%% setting permutation
 if (flag && isfield(opts,'permutation'))
     permutation = opts.permutation;
 else
@@ -78,7 +78,7 @@ else
     tau = 10;
 end
 
-%%%% setting the Fourier domain data
+%%%% setting Fourier domain data
 if(flag && isfield(opts,'lis_Apinv_fft'))
     lis_Apinv_fft = opts.lis_Apinv_fft;
 else
@@ -119,24 +119,96 @@ else
     errors = [errors, norm(tprod(A,X)-B,'fro')^2 / normB];
 end
 
+%% executing GS-GKATK
+if isinf(tau)
+    tM = max(Max_iter-1, 1);
+else
+    tM = max(tau-1, 0);
+end
 
-%% executing Tri-TKGK
 stopc = 0;
-lisX = [];
-lstc = [];
-lisgamma = [];
+Q_list = zeros(l, p*tM, n); 
+q_count = 0;                    
+Q_unnorm = [];   
+Q_norm = NaN;    
 perm = [];
 
+%for k = 0 : Max_iter-1
 while ~stopc
     tic;
     iter = iter + 1;
-    
-    %% update the list of X^k
-    lisX = [lisX, X];
-    if iter > tau
-        lisX(:, 1:p, :) = [];
+    % --------- the first step ----------
+    if iter == 1
+        %% P_{\pi_0}
+        [pi_k, perm] = get_permutation(m, iter, permutation, perm);
+        rho = 0;
+        X_fft = fft(X, [], 3);
+        for i = 1:m
+            idx = pi_k(i);
+            Aidx_fft   = A_fft(idx, :, :);      % 1 × l × n
+            Apinv_i_fft = lis_Apinv_fft(:, idx, :); % l × 1 × n
+            Bidx_fft   = B_fft(idx, :, :);      % 1 × p × n
+        
+            % --- tmp = A(idx) * X - B(idx) ---
+            % size: (1 × p × n)
+            tmp_fft = pagemtimes(Aidx_fft, X_fft) - Bidx_fft;
+            tmp = pagemtimes(Apinv_i_fft, tmp_fft);
+            X_fft = X_fft - tmp;
+            % --- X - A^{\dagger} * tmp ---
+            % size: (l × p × n)
+            diff_norm2 = norm(tmp, 'fro')^2 / n;
+            rho = rho + diff_norm2;
+        end
+        X_tmp = ifft(X_fft, [], 3, 'symmetric');
+        Dk = X_tmp - X;
+        
+        %% Q_0 = D_0
+        Q_unnorm = Dk;
+        Q_norm   = norm(Q_unnorm,'fro');
+        D_norm   = norm(Dk,'fro')^2;
+
+        gamma = 0.5 * (rho + D_norm);
+        lambda = gamma / (Q_norm^2);
+        
+        %% compute X
+        X = X + lambda * Q_unnorm;
+        
+        %% stopping rule (iter=1)
+        
+        if strategy
+            err = norm(X_star - X,'fro')^2 / normXstar2;
+            errors(iter+1) = err;
+            if err < TOL || iter >= Max_iter
+                stopc = 1;
+            end
+        else
+            %%%% Note that we do not use this stopping rule during our test
+            errors(iter+1) = norm(tprod(A,X)-B, 'fro')^2/normB;
+            if  errors(iter+1) < TOL || iter >= Max_iter
+                stopc = 1;
+            end
+        end
+        
+        times(iter+1) = toc;
     end
-    [~, dim2, ~] = size(lisX);
+    if iter == 1 && stopc == 0
+        tic;
+        iter = 2;
+    end
+    
+    %% update the orthogonal basis
+    Qk = Q_unnorm / Q_norm;
+    
+    if q_count < tM
+        q_count = q_count + 1;
+        slot = q_count;
+    else
+        slot = mod(iter-2, tM) + 1;
+    end
+
+    Q_list(:, (slot-1)*p+1:slot*p, :) = Qk;
+
+    %% --------- iter >= 1 ----------
     
     %% P_{\pi_k}
     [pi_k, perm] = get_permutation(m, iter, permutation, perm);
@@ -147,21 +219,21 @@ while ~stopc
         Aidx_fft   = A_fft(idx, :, :);      % 1 × l × n
         Apinv_i_fft = lis_Apinv_fft(:, idx, :); % l × 1 × n
         Bidx_fft   = B_fft(idx, :, :);      % 1 × p × n
-
+    
         % --- tmp = A(idx) * X - B(idx) ---
         % size: (1 × p × n)
         tmp_fft = pagemtimes(Aidx_fft, X_fft) - Bidx_fft;
         tmp = pagemtimes(Apinv_i_fft, tmp_fft);
         X_fft = X_fft - tmp;
-        % --- X - A^+ * tmp ---
+        % --- X - A^{\dagger} * tmp ---
         % size: (l × p × n)
         diff_norm2 = norm(tmp, 'fro')^2 / n;
         rho = rho + diff_norm2;
     end
     X_tmp = ifft(X_fft, [], 3, 'symmetric');
 
-    D_k = X_tmp - X;
-    D_norm = norm(D_k,'fro')^2;
+    Dk = X_tmp - X;
+    D_norm = norm(Dk,'fro')^2;
     
     %% stopping rule (P_{\pi_k}(X^k)-X^k=0)
     if D_norm < TOL_delta 
@@ -177,50 +249,29 @@ while ~stopc
         fprintf('D_norm_square=%.2e, RSE=%.2e', D_norm, rse);
         stopc = 1;
     end
-    
-    %% Tridiagonal process
-    k = iter - 1;
-    % compute and save gamma 
-    gamma = 0.5 * (rho + D_norm);
-    lisgamma = [lisgamma, gamma];
-    
-    j_k = max(k - tau + 1, 0);
-    
-    % compute p_k
-    if k == 0
-        p_k = zeros(k - j_k, 1);
-    else
-        p_k = pk(D_k, lisX(:, 1:(dim2/p-1)*p, :), X);
+
+    %% update the orthogonal basis
+    alpha = zeros(q_count,1);
+    for j = 1:q_count
+        Qj = Q_list(:, (j-1)*p+1:j*p, :);
+        alpha(j) = innerp(Qj, Dk);
     end
     
-    % compute C_k
-    if k == 0
-        C_k = zeros(k - j_k, k - j_k);
-    else
-        C_k = CK(lstc);
+    % linear combination
+    temp = zeros(l,p,n);
+    for j = 1:q_count
+        Qj = Q_list(:, (j-1)*p+1:j*p, :);
+        temp = temp + alpha(j) * Qj;
     end
-    
-    % compute s^k
-    q_k = C_k * p_k;
-    sk_u = gamma / (D_norm - p_k' * q_k);
-    sk_o = (-sk_u) * q_k;
-    
-    % update the elements that construct the tridiagonal matrix C_k
-    lstc = [lstc, gamma * sk_u];
-    if length(lstc) > tau - 1
-        lstc(1) = [];
-    end
-    
+    Q_unnorm = Dk - temp;
+    Q_norm   = norm(Q_unnorm, 'fro');
+
     %% update X^k
-    if k == 0
-        X = X + sk_u * D_k;
-    else
-        X_temp = zeros(l, p, n);
-        for j = 1:(dim2/p - 1)
-            X_temp = X_temp + sk_o(j) * (lisX(:, ((j-1)*p+1):(j)*p, :) - X);
-        end
-        X = X + X_temp + sk_u * D_k;
-    end
+    gamma = 0.5 * (rho + D_norm);
+    lambda = gamma / (Q_norm^2);
+
+    X = X + lambda * Q_unnorm;
+
     
     %% stopping rule
     if strategy
@@ -239,12 +290,13 @@ while ~stopc
     %% store the CPU time
     times(iter+1) = toc;
 end
-
 %% setting Output
 Out.iter       = iter;
 Out.times_iter = times;
 Out.times      = cumsum(times);
 Out.time       = Out.times(end);
 Out.errors     = errors;
-Out.lisgamma   = lisgamma;
 Out.X          = X;
+
+
+
